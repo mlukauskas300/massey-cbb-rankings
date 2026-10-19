@@ -1,45 +1,35 @@
 import pandas as pd
-import requests
+from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 
 
 def fetch_massey_rankings():
-    # Direct backend JSON endpoint used by Massey Ratings for College Basketball
-    api_url = "https://masseyratings.com/api/ratings?s=cb&sub=11590"
+    url = "https://masseyratings.com/ranks?s=cb"
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "Accept": "application/json, text/plain, */*",
-    }
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        page = context.new_page()
 
-    response = requests.get(api_url, headers=headers)
-    response.raise_for_status()
-    data = response.json()
+        print(f"Navigating to {url}...")
+        page.goto(url, wait_until="networkidle", timeout=60000)
+        page.wait_for_selector("table", timeout=30000)
 
-    # Extract team rows and column header definitions
-    teams = data.get("DI", [])
-    cols = data.get("cols", [])
+        content = page.content()
+        browser.close()
 
-    if not teams:
-        print("No ranking data found in the response.")
-        return
+    soup = BeautifulSoup(content, "html.parser")
+    tables = pd.read_html(str(soup))
 
-    # Build header mapping from API definitions
-    column_names = ["Team ID", "Team Name"] + [
-        c.get("name", f"Col_{i}") for i, c in enumerate(cols)
-    ]
+    if not tables:
+        raise ValueError("No tables were found on the rendered page.")
 
-    # Convert raw JSON records into a DataFrame
-    df = pd.DataFrame(teams)
+    df = max(tables, key=lambda t: len(t))
+    df.columns = [str(col).strip() for col in df.columns]
+    df.dropna(how="all", inplace=True)
 
-    # If the column count matches, apply descriptive header titles
-    if len(df.columns) == len(column_names):
-        df.columns = column_names
-
-    # Save cleanly structured rankings to CSV
     df.to_csv("massey_cbb_rankings.csv", index=False)
     print("Successfully saved massey_cbb_rankings.csv")
 
